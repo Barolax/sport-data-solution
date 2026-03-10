@@ -1,0 +1,69 @@
+version: 2
+
+models:
+  - name: stg_employees
+    description: "Données RH nettoyées et standardisées"
+    columns:
+      - name: employee_id
+        description: "Identifiant unique du salarié"
+        tests:
+          - unique
+          - not_null
+      - name: gross_salary
+        description: "Salaire brut annuel"
+        tests:
+          - not_null
+      - name: commute_mode
+        description: "Mode de déplacement standardisé"
+        tests:
+          - accepted_values:
+              values:
+                - "Marche/running"
+                - "Vélo/Trottinette/Autres"
+                - "Transports en commun"
+                - "Véhicule thermique/électrique"
+      - name: contract_type
+        tests:
+          - accepted_values:
+              values: ["CDI", "CDD"]
+
+  - name: stg_activities
+    description: "Activités sportives simulées, nettoyées"
+    columns:
+      - name: activity_id
+        tests:
+          - unique
+          - not_null
+      - name: employee_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_employees')
+              field: employee_id
+      - name: distance_meters
+        description: "Distance en mètres (peut être null pour certains sports)"
+      - name: duration_seconds
+        description: "Durée en secondes"
+
+  - name: mart_sport_bonus
+    description: "Éligibilité et montant de la prime sportive"
+    columns:
+      - name: employee_id
+        tests:
+          - unique
+          - not_null
+      - name: bonus_amount
+        description: "Montant de la prime (0 si non éligible)"
+
+  - name: mart_wellness_days
+    description: "Éligibilité aux journées bien-être"
+    columns:
+      - name: employee_id
+        tests:
+          - unique
+          - not_null
+      - name: wellness_days_granted
+        description: "Nombre de jours accordés (0 ou 5)"
+        tests:
+          - accepted_values:
+              values: [0, 5]

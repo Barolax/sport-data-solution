@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: sport_bronze
+    tables:
+      - name: employees
+        description: "Données RH brutes — 161 salariés"
+      - name: sports_declared
+        description: "Sports déclarés par salarié"
+      - name: strava_activities
+        description: "Activités sportives simulées (PySpark)"
+      - name: commute_distances
+        description: "Distances domicile-bureau (Google Maps API)"

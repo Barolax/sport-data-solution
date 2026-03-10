@@ -1,0 +1,29 @@
+# Airflow providers
+apache-airflow-providers-google>=10.0.0
+apache-airflow-providers-slack>=8.0.0
+
+# Data processing
+pyspark>=3.5.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# GCP
+google-cloud-storage>=2.14.0
+google-cloud-bigquery>=3.17.0
+google-cloud-bigquery-storage>=2.24.0
+
+# Google Maps
+googlemaps>=4.10.0
+
+# dbt
+dbt-bigquery>=1.7.0
+
+# Data Quality
+great-expectations>=0.18.0
+
+# Slack
+slack-sdk>=3.27.0
+
+# Utils
+python-dotenv>=1.0.0
+Faker>=22.0.0

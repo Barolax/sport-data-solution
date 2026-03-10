@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Airflow
+airflow/logs/
+airflow/airflow.db
+airflow/airflow-webserver.pid
+
+# dbt
+dbt_sport/target/
+dbt_sport/dbt_packages/
+dbt_sport/logs/
+
+# Great Expectations
+great_expectations/uncommitted/
+great_expectations/checkpoints/
+
+# GCP credentials
+*.json
+!dbt_sport/dbt_project.yml
+
+# Data (les fichiers raw sont versionnés, pas les données générées)
+data/generated/
+data/processed/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Docker
+docker-compose.override.yml
