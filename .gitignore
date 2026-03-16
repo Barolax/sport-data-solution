@@ -51,3 +51,6 @@ data/processed/
 
 # Docker
 docker-compose.override.yml
+
+# Secret
+echo "secrets/" >> .gitignore 
