@@ -34,7 +34,7 @@ eligibility AS (
             ELSE 0
         END AS bonus_amount
     FROM employees e
-    LEFT JOIN distances d ON e.employee_id = d.employee_id
+    LEFT JOIN distances d ON e.employee_id = d.id_salarie
 )
 
 SELECT

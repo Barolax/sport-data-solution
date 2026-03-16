@@ -9,8 +9,13 @@ cleaned AS (
     SELECT
         CAST(id_salarie AS INT64) AS employee_id,
         TRIM(nom) AS last_name,
-        TRIM(prenom) AS first_name,
-        CONCAT(TRIM(prenom), ' ', TRIM(nom)) AS full_name,
+        -- Correction encodage UTF-8 (ex: TimothÃ©e → Timothée)
+        TRIM(REPLACE(REPLACE(REPLACE(prenom, 'Ã©', 'é'), 'Ã¨', 'è'), 'Ã ', 'à')) AS first_name,
+        CONCAT(
+            TRIM(REPLACE(REPLACE(REPLACE(prenom, 'Ã©', 'é'), 'Ã¨', 'è'), 'Ã ', 'à')),
+            ' ',
+            TRIM(nom)
+        ) AS full_name,
         date_naissance AS birth_date,
         TRIM(bu) AS business_unit,
         date_embauche AS hire_date,
