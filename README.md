@@ -94,7 +94,3 @@ Voir `.env.example` pour la liste complète des variables à configurer.
 - Challenges sportifs inter-équipes (par BU)
 - Application mobile pour les déclarations
 - Intégration d'un système de badges et gamification
-
-## 👤 Auteur
-
-Projet réalisé dans le cadre de la certification **Expert en ingénierie et science des données** (RNCP niveau 7) — OpenClassrooms.
