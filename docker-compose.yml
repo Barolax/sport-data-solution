@@ -6,12 +6,27 @@ x-airflow-common: &airflow-common
     dockerfile: Dockerfile
   env_file:
     - .env
+  environment:
+    - GOOGLE_APPLICATION_CREDENTIALS=/opt/airflow/secrets/gcp-key.json
+    - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+    - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
+    - BQ_DATASET_BRONZE=${BQ_DATASET_BRONZE}
+    - BQ_DATASET_SILVER=${BQ_DATASET_SILVER}
+    - BQ_DATASET_GOLD=${BQ_DATASET_GOLD}
+    - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+    - COMPANY_ADDRESS=${COMPANY_ADDRESS}
+    - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    - SLACK_CHANNEL=${SLACK_CHANNEL}
+    - SPARK_MASTER=${SPARK_MASTER}
+    - STRAVA_SIMULATION_MONTHS=${STRAVA_SIMULATION_MONTHS}
+    - STRAVA_SIMULATION_MIN_ROWS=${STRAVA_SIMULATION_MIN_ROWS}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
     - ./data:/opt/airflow/data
     - ./dbt_sport:/opt/airflow/dbt_sport
-    - ./great_expectations:/opt/airflow/great_expectations
+    - ./ge_tests:/opt/airflow/ge_tests
+    - ./secret:/opt/airflow/secrets
     - airflow-logs:/opt/airflow/logs
   depends_on:
     postgres:
