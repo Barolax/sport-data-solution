@@ -79,6 +79,10 @@ docker-compose up -d
 
 Voir `.env.example` pour la liste complète des variables à configurer.
 
+## 📈 Dashboard
+
+[Accéder au dashboard Looker Studio](https://lookerstudio.google.com/reporting/38acfe7b-3b43-4430-a09a-a1141c608ee1)
+
 ## 📊 KPIs suivis
 
 - Coût total des primes sportives par BU
