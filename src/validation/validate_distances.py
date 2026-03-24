@@ -31,6 +31,9 @@ DISTANCE_THRESHOLDS = {
     "Vélo/Trottinette/Autres": 25,
 }
 
+# Seuil pour les suggestions de mobilité sportive
+SUGGESTION_THRESHOLD_KM = 10
+
 # Modes Google Maps correspondants
 TRANSPORT_MODES = {
     "Marche/running": "walking",
@@ -63,6 +66,26 @@ def get_sport_commuters() -> pd.DataFrame:
             moyen_deplacement
         FROM `{PROJECT_ID}.{BQ_DATASET_BRONZE}.employees`
         WHERE moyen_deplacement IN ('Marche/running', 'Vélo/Trottinette/Autres')
+        ORDER BY id_salarie
+    """
+    return client.query(query).to_dataframe()
+
+
+def get_non_sport_commuters() -> pd.DataFrame:
+    """
+    Récupère les salariés qui NE viennent PAS en mode sportif
+    (voiture ou transports en commun).
+    """
+    client = get_bq_client()
+    query = f"""
+        SELECT
+            id_salarie,
+            prenom,
+            nom,
+            adresse_domicile,
+            moyen_deplacement
+        FROM `{PROJECT_ID}.{BQ_DATASET_BRONZE}.employees`
+        WHERE moyen_deplacement NOT IN ('Marche/running', 'Vélo/Trottinette/Autres')
         ORDER BY id_salarie
     """
     return client.query(query).to_dataframe()
@@ -175,28 +198,14 @@ def validate_commute_declarations() -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
-def save_to_bigquery(df: pd.DataFrame) -> None:
+def save_to_bigquery(df: pd.DataFrame, table_name: str = "commute_distances") -> None:
     """Sauvegarde les résultats de validation dans BigQuery (bronze)."""
     client = get_bq_client()
-    table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.commute_distances"
-
-    schema = [
-        bigquery.SchemaField("id_salarie", "INTEGER"),
-        bigquery.SchemaField("prenom", "STRING"),
-        bigquery.SchemaField("nom", "STRING"),
-        bigquery.SchemaField("adresse_domicile", "STRING"),
-        bigquery.SchemaField("moyen_deplacement", "STRING"),
-        bigquery.SchemaField("google_maps_mode", "STRING"),
-        bigquery.SchemaField("distance_km", "FLOAT"),
-        bigquery.SchemaField("duration_text", "STRING"),
-        bigquery.SchemaField("threshold_km", "FLOAT"),
-        bigquery.SchemaField("is_valid", "BOOLEAN"),
-        bigquery.SchemaField("anomaly_reason", "STRING"),
-    ]
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.{table_name}"
 
     job_config = bigquery.LoadJobConfig(
-        schema=schema,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        autodetect=True,
     )
 
     job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
@@ -206,6 +215,56 @@ def save_to_bigquery(df: pd.DataFrame) -> None:
     print(f"\n✅ Loaded {table.num_rows} rows → {table_id}")
 
 
+def check_sport_suggestions() -> pd.DataFrame:
+    """
+    Vérifie les salariés non-sportifs qui habitent à moins de 10km.
+    Suggère un mode de transport sportif pour ces salariés.
+    """
+    print("\n📥 Récupération des salariés non-sportifs...")
+    non_sport = get_non_sport_commuters()
+    print(f"   {len(non_sport)} salariés à analyser\n")
+
+    gmaps = get_gmaps_client()
+    suggestions = []
+
+    for _, row in non_sport.iterrows():
+        # On calcule la distance en vélo (mode le plus large)
+        dist_info = calculate_distance(gmaps, row["adresse_domicile"], "bicycling")
+
+        distance_km = dist_info["distance_km"]
+        could_bike = distance_km is not None and distance_km <= SUGGESTION_THRESHOLD_KM
+        could_walk = distance_km is not None and distance_km <= 5  # Marche raisonnable ≤ 5km
+
+        if could_bike:
+            if could_walk:
+                suggestion = "Marche ou vélo possible"
+                icon = "🚶"
+            else:
+                suggestion = "Vélo ou trottinette possible"
+                icon = "🚴"
+            print(f"   {icon} {row['prenom']} {row['nom']} — {distance_km} km — {suggestion}")
+        else:
+            suggestion = None
+            dist_str = f"{distance_km} km" if distance_km else "N/A"
+            print(f"   ⏭️  {row['prenom']} {row['nom']} — {dist_str} — Trop loin")
+
+        suggestions.append({
+            "id_salarie": row["id_salarie"],
+            "prenom": row["prenom"],
+            "nom": row["nom"],
+            "adresse_domicile": row["adresse_domicile"],
+            "moyen_deplacement_actuel": row["moyen_deplacement"],
+            "distance_km": distance_km,
+            "could_bike": could_bike,
+            "could_walk": could_walk,
+            "suggestion": suggestion,
+        })
+
+        time.sleep(0.1)
+
+    return pd.DataFrame(suggestions)
+
+
 def run():
     """Point d'entrée principal."""
     print("=" * 60)
@@ -213,18 +272,18 @@ def run():
     print(f"   Entreprise : {COMPANY_ADDRESS}")
     print("=" * 60)
 
-    # 1. Valider les déclarations
+    # === PARTIE 1 : Validation des trajets sportifs ===
+    print("\n" + "=" * 60)
+    print("📋 PARTIE 1 — Validation des déclarations sportives")
+    print("=" * 60)
+
     results_df = validate_commute_declarations()
 
-    # 2. Résumé
     total = len(results_df)
     valid = results_df["is_valid"].sum()
     anomalies = total - valid
 
-    print(f"\n{'=' * 60}")
-    print(f"📊 Résumé de la validation")
-    print(f"{'=' * 60}")
-    print(f"   Total salariés vérifiés : {total}")
+    print(f"\n   Total salariés vérifiés : {total}")
     print(f"   ✅ Déclarations valides  : {valid}")
     print(f"   ❌ Anomalies détectées   : {anomalies}")
 
@@ -237,11 +296,27 @@ def run():
                 f"{row['moyen_deplacement']} — {row['anomaly_reason']}"
             )
 
-    # 3. Sauvegarder dans BigQuery
-    print(f"\n📤 Sauvegarde dans BigQuery (bronze)...")
-    save_to_bigquery(results_df)
+    print(f"\n📤 Sauvegarde dans BigQuery...")
+    save_to_bigquery(results_df, "commute_distances")
 
-    print(f"\n🎉 Validation terminée !")
+    # === PARTIE 2 : Suggestions mobilité sportive ===
+    print("\n" + "=" * 60)
+    print(f"💡 PARTIE 2 — Suggestions mobilité sportive (< {SUGGESTION_THRESHOLD_KM} km)")
+    print("=" * 60)
+
+    suggestions_df = check_sport_suggestions()
+
+    eligible = suggestions_df["could_bike"].sum()
+    walkable = suggestions_df["could_walk"].sum()
+
+    print(f"\n   Total salariés non-sportifs analysés : {len(suggestions_df)}")
+    print(f"   🚴 Pourraient venir à vélo           : {eligible}")
+    print(f"   🚶 Pourraient venir à pied            : {walkable}")
+
+    print(f"\n📤 Sauvegarde des suggestions dans BigQuery...")
+    save_to_bigquery(suggestions_df, "commute_suggestions")
+
+    print(f"\n🎉 Validation et suggestions terminées !")
 
 
 if __name__ == "__main__":
