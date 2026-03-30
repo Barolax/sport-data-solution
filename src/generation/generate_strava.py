@@ -389,6 +389,7 @@ def load_to_bigquery(activities: list[dict]) -> None:
         bigquery.SchemaField("distance_m", "FLOAT"),
         bigquery.SchemaField("date_fin", "TIMESTAMP"),
         bigquery.SchemaField("commentaire", "STRING"),
+        bigquery.SchemaField("source", "STRING"),
     ]
 
     job_config = bigquery.LoadJobConfig(
