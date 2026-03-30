@@ -304,6 +304,7 @@ def generate_activity_for_month(
             "distance_m": float(distance_m) if distance_m else None,
             "date_fin": ended_at,
             "commentaire": comment,
+            "source": "simulation",
         })
 
     return activities
@@ -365,6 +366,7 @@ def activities_to_spark_df(spark: SparkSession, activities: list[dict]):
         StructField("distance_m", FloatType(), True),
         StructField("date_fin", TimestampType(), False),
         StructField("commentaire", StringType(), True),
+        StructField("source", StringType(), True),
     ])
 
     return spark.createDataFrame(activities, schema=schema)
