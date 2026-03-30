@@ -278,12 +278,13 @@ with DAG(
         trigger_rule="all_done",  # S'exécute même si une task précédente échoue
     )
 
-    end = EmptyOperator(task_id="end")
+    end = EmptyOperator(task_id="end", trigger_rule="all_done") 
 
     # === Task dependencies ===
     start >> [ingest_rh, ingest_sport]
     [ingest_rh, ingest_sport] >> generate_strava
     generate_strava >> validate_distances
     validate_distances >> dbt_run >> dbt_test
-    dbt_test >> run_great_expectations
-    run_great_expectations >> notify_slack >> end
+    # Branches parallèles après dbt_test
+    dbt_test >> run_great_expectations >> end
+    dbt_test >> notify_slack >> end
