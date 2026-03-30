@@ -229,12 +229,52 @@ with tab1:
         )
         duration_s = int(duree_minutes * 60)
 
-    comment = st.text_input(
-        "Commentaire (optionnel)",
-        placeholder="Super séance aujourd'hui !"
-    )
+    comment = st.text_input("Commentaire (optionnel)", placeholder="Super séance aujourd'hui !")
 
-    if st.button("✅ Déclarer l'activité", type="primary", use_container_width=True):
+    # --- Validation des seuils par sport ---
+    SPORT_LIMITS = {
+        "Course à pied": {"max_distance_km": 50, "max_duration_min": 480},
+        "Randonnée": {"max_distance_km": 50, "max_duration_min": 720},
+        "Vélo": {"max_distance_km": 200, "max_duration_min": 600},
+        "Natation": {"max_distance_km": 10, "max_duration_min": 240},
+        "Triathlon": {"max_distance_km": 200, "max_duration_min": 600},
+        "Voile": {"max_distance_km": 100, "max_duration_min": 720},
+        "Tennis": {"max_distance_km": None, "max_duration_min": 300},
+        "Football": {"max_distance_km": None, "max_duration_min": 180},
+        "Rugby": {"max_distance_km": None, "max_duration_min": 180},
+        "Badminton": {"max_distance_km": None, "max_duration_min": 180},
+        "Boxe": {"max_distance_km": None, "max_duration_min": 180},
+        "Judo": {"max_distance_km": None, "max_duration_min": 180},
+        "Escalade": {"max_distance_km": None, "max_duration_min": 300},
+        "Équitation": {"max_distance_km": None, "max_duration_min": 300},
+        "Tennis de table": {"max_distance_km": None, "max_duration_min": 180},
+        "Basketball": {"max_distance_km": None, "max_duration_min": 180},
+    }
+    DEFAULT_LIMITS = {"max_distance_km": None, "max_duration_min": 300}
+
+    limits = SPORT_LIMITS.get(sport_type, DEFAULT_LIMITS)
+    validation_errors = []
+
+    if has_distance and limits.get("max_distance_km"):
+        if distance_km > limits["max_distance_km"]:
+            validation_errors.append(
+                f"Distance trop élevée : {distance_km} km > max {limits['max_distance_km']} km pour {sport_type}"
+            )
+
+    if duree_minutes > limits.get("max_duration_min", 300):
+        validation_errors.append(
+            f"Durée trop élevée : {duree_minutes} min > max {limits['max_duration_min']} min pour {sport_type}"
+        )
+
+    if duree_minutes < 1:
+        validation_errors.append("La durée doit être d'au moins 1 minute")
+
+    if validation_errors:
+        for error in validation_errors:
+            st.error(f"⚠️ {error}")
+
+    # Bouton de soumission
+    if st.button("✅ Déclarer l'activité", type="primary", use_container_width=True, disabled=len(validation_errors) > 0):
         date_debut = datetime.combine(date_activite, heure_debut)
         date_fin = date_debut + timedelta(seconds=duration_s)
 

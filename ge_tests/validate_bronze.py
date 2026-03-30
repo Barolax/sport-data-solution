@@ -180,12 +180,13 @@ def run():
     activities_suite.add_expectation(
         ExpectColumnValuesToNotBeNull(column="sport_type")
     )
-    # Distance peut être null (escalade, sports sans distance)
-    # Mais si elle existe, elle doit être positive
+    
+    # Validation des seuils réalistes par activité (distance peut être nulle pour une session de muscu, mais pas négative)
+    # Distance max réaliste : 200 km (vélo/triathlon)
     activities_suite.add_expectation(
         ExpectColumnValuesToBeBetween(
-            column="distance_m", min_value=0, max_value=100000,
-            mostly=0.99,  # Tolère 1% de nulls
+            column="distance_m", min_value=0, max_value=200000,
+            mostly=0.99, # Tolère 1% de nulls
         )
     )
 
