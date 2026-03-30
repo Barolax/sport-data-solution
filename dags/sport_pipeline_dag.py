@@ -66,8 +66,9 @@ default_args = {
     "owner": "sport-data-solution",
     "depends_on_past": False,
     "email_on_failure": False,
-    "retries": 1,
+    "retries": 5,
     "retry_delay": timedelta(minutes=5),
+    "execution_timeout": timedelta(hours=1),
     "on_failure_callback": on_failure_callback,
 }
 
@@ -273,6 +274,8 @@ with DAG(
         task_id="notify_slack_activities",
         python_callable=task_notify_slack,
         provide_context=True,
+        retries=2,  #2 retries pour notif Slack en cas d'échec 
+        trigger_rule="all_done",  # S'exécute même si une task précédente échoue
     )
 
     end = EmptyOperator(task_id="end")
