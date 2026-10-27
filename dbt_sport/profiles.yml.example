@@ -1,0 +1,21 @@
+# dbt profile template — Sport Data Solution
+# 
+# Setup:
+#   1. Copy this file: cp profiles.yml.example profiles.yml
+#   2. Set the required environment variables (see .env.example)
+#   3. Never commit profiles.yml — it is in .gitignore
+#
+# Docs: https://docs.getdbt.com/docs/core/connect-data-platform/bigquery-setup
+
+sport_data_solution:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: "{{ env_var('GCP_PROJECT_ID') }}"
+      dataset: your_dataset_here        # e.g. dbt_dev
+      threads: 4
+      timeout_seconds: 300
+      location: your_region_here        # e.g. EU, US, europe-west1
+      keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
