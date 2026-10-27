@@ -52,8 +52,8 @@ data/processed/
 # Docker
 docker-compose.override.yml
 
-# Secret
-echo "secrets/" >> .gitignore 
-echo "dbt_sport/profiles.yml" >> .gitignore
-echo "dbt_sport/.user.yml" >> .gitignore
-echo "*.xlsx" >> .gitignore
+# Secrets 
+secrets/
+dbt_sport/profiles.yml
+dbt_sport/.user.yml
+
