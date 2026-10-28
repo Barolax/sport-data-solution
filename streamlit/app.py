@@ -5,34 +5,148 @@ et publiée automatiquement sur Slack.
 
 Usage :
     streamlit run streamlit/app.py
+
+Mode démo (sans GCP) :
+    DEMO_MODE=true streamlit run streamlit/app.py
 """
+
+import sys
+from pathlib import Path
+
+# Ajoute la racine du projet au PYTHONPATH
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from google.cloud import bigquery
 
 load_dotenv()
 
+# =============================================================
+# CONFIGURATION
+# =============================================================
+
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE", "sport_bronze")
+BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE")
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+# Validation : soit on a les credentials, soit on est en mode démo
+if not DEMO_MODE and (not PROJECT_ID or not BQ_DATASET_BRONZE):
+    st.error("""
+    ❌ Configuration manquante.
+    
+    Deux options :
+    1. Configurer GCP_PROJECT_ID et BQ_DATASET_BRONZE dans .env
+    2. Activer le mode démo : DEMO_MODE=true dans .env
+    """)
+    st.stop()
+
+# Import conditionnel de BigQuery (seulement si pas en mode démo)
+if not DEMO_MODE:
+    from google.cloud import bigquery
+    from src.notifications.slack_notifier import build_message, send_slack_message
 
 
 # =============================================================
-# BIGQUERY
+# CONSTANTES MÉTIER
+# =============================================================
+
+SPORT_TYPES = [
+    "Course à pied",
+    "Randonnée",
+    "Vélo",
+    "Natation",
+    "Tennis",
+    "Football",
+    "Rugby",
+    "Badminton",
+    "Boxe",
+    "Escalade",
+    "Triathlon",
+    "Judo",
+    "Voile",
+    "Équitation",
+    "Tennis de table",
+    "Basketball",
+    "Autre",
+]
+
+SPORTS_SANS_DISTANCE = [
+    "Tennis",
+    "Football",
+    "Rugby",
+    "Badminton",
+    "Boxe",
+    "Escalade",
+    "Judo",
+    "Équitation",
+    "Tennis de table",
+    "Basketball",
+]
+
+SPORT_LIMITS = {
+    "Course à pied": {"max_distance_km": 50, "max_duration_min": 480},
+    "Randonnée": {"max_distance_km": 50, "max_duration_min": 720},
+    "Vélo": {"max_distance_km": 200, "max_duration_min": 600},
+    "Natation": {"max_distance_km": 10, "max_duration_min": 240},
+    "Triathlon": {"max_distance_km": 200, "max_duration_min": 600},
+    "Voile": {"max_distance_km": 100, "max_duration_min": 720},
+    "Tennis": {"max_distance_km": None, "max_duration_min": 300},
+    "Football": {"max_distance_km": None, "max_duration_min": 180},
+    "Rugby": {"max_distance_km": None, "max_duration_min": 180},
+    "Badminton": {"max_distance_km": None, "max_duration_min": 180},
+    "Boxe": {"max_distance_km": None, "max_duration_min": 180},
+    "Judo": {"max_distance_km": None, "max_duration_min": 180},
+    "Escalade": {"max_distance_km": None, "max_duration_min": 300},
+    "Équitation": {"max_distance_km": None, "max_duration_min": 300},
+    "Tennis de table": {"max_distance_km": None, "max_duration_min": 180},
+    "Basketball": {"max_distance_km": None, "max_duration_min": 180},
+}
+
+DEFAULT_LIMITS = {"max_distance_km": None, "max_duration_min": 300}
+
+
+# =============================================================
+# DONNÉES DE DÉMO (mode local sans GCP)
+# =============================================================
+
+DEMO_EMPLOYEES = pd.DataFrame({
+    "id_salarie": [1, 2, 3],
+    "prenom": ["Alice", "Bob", "Charlie"],
+    "nom": ["Dupont", "Martin", "Durand"]
+})
+
+DEMO_ACTIVITIES = pd.DataFrame({
+    "date_debut": pd.to_datetime(["2024-01-15 08:00", "2024-01-14 18:30", "2024-01-10 07:00"]),
+    "sport_type": ["Course à pied", "Vélo", "Natation"],
+    "distance_m": [5000, 15000, 2000],
+    "duration_s": [1800, 3600, 1200],
+    "commentaire": ["Footing matinal", "Sortie longue", "Piscine"],
+    "origine": ["demo", "demo", "demo"]
+})
+
+
+# =============================================================
+# BIGQUERY (ou démo)
 # =============================================================
 
 def get_bq_client():
+    """Crée un client BigQuery (seulement en mode non-démo)."""
+    if DEMO_MODE:
+        raise RuntimeError("Mode démo activé : pas de connexion BigQuery")
     return bigquery.Client(project=PROJECT_ID)
 
 
 @st.cache_data(ttl=300)
 def get_employees():
-    """Récupère la liste des employés depuis BigQuery."""
+    """Récupère la liste des employés (BigQuery ou démo)."""
+    if DEMO_MODE:
+        return DEMO_EMPLOYEES.copy()
+    
     client = get_bq_client()
     query = f"""
         SELECT id_salarie, prenom, nom
@@ -43,9 +157,11 @@ def get_employees():
 
 
 def get_employee_activities(employee_id: int):
-    """Récupère les activités simulées + manuelles d'un employé."""
+    """Récupère les activités d'un employé (BigQuery ou démo)."""
+    if DEMO_MODE:
+        return DEMO_ACTIVITIES.copy()
+    
     client = get_bq_client()
-
     query = f"""
         SELECT
             date_debut,
@@ -83,10 +199,13 @@ def get_employee_activities(employee_id: int):
 
 
 def insert_activity(activity: dict):
-    """Insère une nouvelle activité dans BigQuery."""
+    """Insère une nouvelle activité (BigQuery ou démo)."""
+    if DEMO_MODE:
+        st.info("🎭 Mode démo : activité non persistée (pas de connexion BigQuery)")
+        return True
+    
     client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.manual_activities"
-
     errors = client.insert_rows_json(table_id, [activity])
 
     if errors:
@@ -97,13 +216,16 @@ def insert_activity(activity: dict):
 
 
 # =============================================================
-# SLACK
+# SLACK (ou démo)
 # =============================================================
 
-def send_slack_notification(prenom, nom, sport_type, distance_m, duration_s, comment):
-    """Envoie un message Slack pour la nouvelle activité."""
-    from src.notifications.slack_notifier import build_message, send_slack_message
-
+def send_slack_notification(prenom: str, nom: str, sport_type: str,
+                           distance_m: float, duration_s: int, comment: str):
+    """Envoie un message Slack (ou simule en mode démo)."""
+    if DEMO_MODE:
+        st.info("🎭 Mode démo : notification Slack simulée")
+        return True
+    
     msg = build_message(
         prenom=prenom,
         nom=nom,
@@ -113,6 +235,34 @@ def send_slack_notification(prenom, nom, sport_type, distance_m, duration_s, com
         comment=comment,
     )
     return send_slack_message(msg)
+
+
+# =============================================================
+# VALIDATION
+# =============================================================
+
+def validate_activity(sport_type: str, distance_km: float, duree_minutes: int) -> list:
+    """Valide une activité selon les limites du sport."""
+    limits = SPORT_LIMITS.get(sport_type, DEFAULT_LIMITS)
+    errors = []
+
+    has_distance = sport_type not in SPORTS_SANS_DISTANCE
+
+    if has_distance and limits.get("max_distance_km"):
+        if distance_km > limits["max_distance_km"]:
+            errors.append(
+                f"Distance trop élevée : {distance_km} km > max {limits['max_distance_km']} km pour {sport_type}"
+            )
+
+    if duree_minutes > limits.get("max_duration_min", 300):
+        errors.append(
+            f"Durée trop élevée : {duree_minutes} min > max {limits['max_duration_min']} min pour {sport_type}"
+        )
+
+    if duree_minutes < 1:
+        errors.append("La durée doit être d'au moins 1 minute")
+
+    return errors
 
 
 # =============================================================
@@ -128,9 +278,9 @@ st.set_page_config(
 st.title("🏃 Sport Data Solution")
 st.subheader("Déclaration d'activités sportives")
 
-if not PROJECT_ID:
-    st.error("La variable d'environnement GCP_PROJECT_ID est absente.")
-    st.stop()
+# Indicateur mode démo
+if DEMO_MODE:
+    st.warning("🎭 **MODE DÉMO** — Données fictives, pas de connexion BigQuery/Slack")
 
 # --- Sidebar : sélection employé ---
 st.sidebar.header("👤 Employé")
@@ -138,11 +288,16 @@ st.sidebar.header("👤 Employé")
 employees = get_employees()
 
 if employees.empty:
-    st.error("Aucun employé trouvé dans BigQuery.")
+    st.error("Aucun employé trouvé.")
     st.stop()
 
+# Stocke prénom et nom séparément pour éviter les problèmes de parsing
 employee_options = {
-    f"{row['prenom']} {row['nom']}": row["id_salarie"]
+    f"{row['prenom']} {row['nom']}": {
+        "id": row["id_salarie"],
+        "prenom": row["prenom"],
+        "nom": row["nom"],
+    }
     for _, row in employees.iterrows()
 }
 
@@ -150,7 +305,7 @@ selected_name = st.sidebar.selectbox(
     "Sélectionner un employé",
     list(employee_options.keys())
 )
-selected_id = employee_options[selected_name]
+selected_employee = employee_options[selected_name]
 
 # --- Onglets ---
 tab1, tab2 = st.tabs(["📝 Nouvelle activité", "📊 Mes activités"])
@@ -164,27 +319,7 @@ with tab1:
     col1, col2 = st.columns(2)
 
     with col1:
-        sport_types = [
-            "Course à pied",
-            "Randonnée",
-            "Vélo",
-            "Natation",
-            "Tennis",
-            "Football",
-            "Rugby",
-            "Badminton",
-            "Boxe",
-            "Escalade",
-            "Triathlon",
-            "Judo",
-            "Voile",
-            "Équitation",
-            "Tennis de table",
-            "Basketball",
-            "Autre",
-        ]
-
-        sport_type = st.selectbox("Type de sport", sport_types)
+        sport_type = st.selectbox("Type de sport", SPORT_TYPES)
         date_activite = st.date_input("Date de l'activité", value=datetime.now().date())
         heure_debut = st.time_input(
             "Heure de début",
@@ -192,20 +327,7 @@ with tab1:
         )
 
     with col2:
-        sports_sans_distance = [
-            "Tennis",
-            "Football",
-            "Rugby",
-            "Badminton",
-            "Boxe",
-            "Escalade",
-            "Judo",
-            "Équitation",
-            "Tennis de table",
-            "Basketball",
-        ]
-
-        has_distance = sport_type not in sports_sans_distance
+        has_distance = sport_type not in SPORTS_SANS_DISTANCE
 
         if has_distance:
             distance_km = st.number_input(
@@ -217,6 +339,7 @@ with tab1:
             )
             distance_m = float(distance_km * 1000)
         else:
+            distance_km = None
             distance_m = None
             st.info(f"Pas de distance requise pour {sport_type}")
 
@@ -231,63 +354,30 @@ with tab1:
 
     comment = st.text_input("Commentaire (optionnel)", placeholder="Super séance aujourd'hui !")
 
-    # --- Validation des seuils par sport ---
-    SPORT_LIMITS = {
-        "Course à pied": {"max_distance_km": 50, "max_duration_min": 480},
-        "Randonnée": {"max_distance_km": 50, "max_duration_min": 720},
-        "Vélo": {"max_distance_km": 200, "max_duration_min": 600},
-        "Natation": {"max_distance_km": 10, "max_duration_min": 240},
-        "Triathlon": {"max_distance_km": 200, "max_duration_min": 600},
-        "Voile": {"max_distance_km": 100, "max_duration_min": 720},
-        "Tennis": {"max_distance_km": None, "max_duration_min": 300},
-        "Football": {"max_distance_km": None, "max_duration_min": 180},
-        "Rugby": {"max_distance_km": None, "max_duration_min": 180},
-        "Badminton": {"max_distance_km": None, "max_duration_min": 180},
-        "Boxe": {"max_distance_km": None, "max_duration_min": 180},
-        "Judo": {"max_distance_km": None, "max_duration_min": 180},
-        "Escalade": {"max_distance_km": None, "max_duration_min": 300},
-        "Équitation": {"max_distance_km": None, "max_duration_min": 300},
-        "Tennis de table": {"max_distance_km": None, "max_duration_min": 180},
-        "Basketball": {"max_distance_km": None, "max_duration_min": 180},
-    }
-    DEFAULT_LIMITS = {"max_distance_km": None, "max_duration_min": 300}
-
-    limits = SPORT_LIMITS.get(sport_type, DEFAULT_LIMITS)
-    validation_errors = []
-
-    if has_distance and limits.get("max_distance_km"):
-        if distance_km > limits["max_distance_km"]:
-            validation_errors.append(
-                f"Distance trop élevée : {distance_km} km > max {limits['max_distance_km']} km pour {sport_type}"
-            )
-
-    if duree_minutes > limits.get("max_duration_min", 300):
-        validation_errors.append(
-            f"Durée trop élevée : {duree_minutes} min > max {limits['max_duration_min']} min pour {sport_type}"
-        )
-
-    if duree_minutes < 1:
-        validation_errors.append("La durée doit être d'au moins 1 minute")
+    # Validation
+    validation_errors = validate_activity(sport_type, distance_km, duree_minutes)
 
     if validation_errors:
         for error in validation_errors:
             st.error(f"⚠️ {error}")
 
     # Bouton de soumission
-    if st.button("✅ Déclarer l'activité", type="primary", use_container_width=True, disabled=len(validation_errors) > 0):
+    submit_disabled = len(validation_errors) > 0
+    
+    if st.button("✅ Déclarer l'activité", type="primary", use_container_width=True, disabled=submit_disabled):
         date_debut = datetime.combine(date_activite, heure_debut)
         date_fin = date_debut + timedelta(seconds=duration_s)
 
         activity = {
             "activity_id": str(uuid.uuid4()),
-            "id_salarie": int(selected_id),
+            "id_salarie": int(selected_employee["id"]),
             "date_debut": date_debut.isoformat(),
             "sport_type": sport_type,
             "distance_m": distance_m,
             "date_fin": date_fin.isoformat(),
             "commentaire": comment if comment else None,
             "source": "streamlit",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         with st.spinner("Enregistrement en cours..."):
@@ -296,12 +386,10 @@ with tab1:
         if success:
             st.success(f"✅ Activité enregistrée ! {sport_type} — {duree_minutes} min")
 
-            prenom, nom = selected_name.split(" ", 1)
-
             with st.spinner("Envoi de la notification Slack..."):
                 slack_ok = send_slack_notification(
-                    prenom=prenom,
-                    nom=nom,
+                    prenom=selected_employee["prenom"],
+                    nom=selected_employee["nom"],
                     sport_type=sport_type,
                     distance_m=distance_m,
                     duration_s=duration_s,
@@ -322,7 +410,7 @@ with tab1:
 with tab2:
     st.markdown(f"### Activités de {selected_name}")
 
-    activities = get_employee_activities(int(selected_id))
+    activities = get_employee_activities(int(selected_employee["id"]))
 
     if activities.empty:
         st.info("Aucune activité enregistrée pour cet employé.")
