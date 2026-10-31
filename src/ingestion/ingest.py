@@ -4,33 +4,71 @@ Excel → GCS (raw) → BigQuery (bronze)
 
 Usage en local :
     python -m src.ingestion.ingest
+
+Mode démo (sans cloud) :
+    DEMO_MODE=true python -m src.ingestion.ingest
 """
 
 import os
+import sys
+from pathlib import Path
+
 import pandas as pd
-from google.cloud import storage, bigquery
 from dotenv import load_dotenv
+
+# Ajoute la racine du projet au PYTHONPATH
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 load_dotenv()
 
-# --- Config ---
+# Mode démo : pas de connexion cloud
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+if not DEMO_MODE:
+    from google.cloud import bigquery, storage
+
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE", "sport_bronze")
+BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE")
+
+# Validation
+if not DEMO_MODE and (not PROJECT_ID or not BUCKET_NAME or not BQ_DATASET_BRONZE):
+    raise ValueError("""
+    ❌ Configuration manquante.
+    
+    Variables requises :
+    - GCP_PROJECT_ID
+    - GCS_BUCKET_NAME  
+    - BQ_DATASET_BRONZE
+    
+    Ou activer le mode démo : DEMO_MODE=true
+    """)
+
+# Chemins
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DATA_RAW_PATH = PROJECT_ROOT / "data" / "raw"
 
 
-def get_bq_client() -> bigquery.Client:
+def get_bq_client():
     """Initialise le client BigQuery."""
+    if DEMO_MODE:
+        raise RuntimeError("Mode démo : pas de connexion BigQuery")
     return bigquery.Client(project=PROJECT_ID)
 
 
-def get_gcs_client() -> storage.Client:
+def get_gcs_client():
     """Initialise le client GCS."""
+    if DEMO_MODE:
+        raise RuntimeError("Mode démo : pas de connexion GCS")
     return storage.Client(project=PROJECT_ID)
 
 
 def upload_to_gcs(local_path: str, destination_blob: str) -> str:
     """Upload un fichier local vers GCS (zone raw)."""
+    if DEMO_MODE:
+        print(f"🎭 Mode démo : upload simulé {local_path} → gs://demo-bucket/raw/{destination_blob}")
+        return f"gs://demo-bucket/raw/{destination_blob}"
+    
     client = get_gcs_client()
     bucket = client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"raw/{destination_blob}")
@@ -44,6 +82,13 @@ def load_rh_to_bigquery(local_path: str) -> None:
     Charge le fichier RH Excel dans BigQuery (bronze).
     Table : sport_bronze.employees
     """
+    if DEMO_MODE:
+        print(f"🎭 Mode démo : chargement simulé {local_path} → BigQuery employees")
+        # Lecture réelle pour valider le fichier
+        df = pd.read_excel(local_path, engine="openpyxl")
+        print(f"   {len(df)} lignes détectées")
+        return
+    
     client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.employees"
 
@@ -104,6 +149,12 @@ def load_sport_to_bigquery(local_path: str) -> None:
     Charge le fichier Sportif Excel dans BigQuery (bronze).
     Table : sport_bronze.sports_declared
     """
+    if DEMO_MODE:
+        print(f"🎭 Mode démo : chargement simulé {local_path} → BigQuery sports_declared")
+        df = pd.read_excel(local_path, engine="openpyxl")
+        print(f"   {len(df)} lignes détectées")
+        return
+    
     client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.sports_declared"
 
@@ -140,21 +191,21 @@ def load_sport_to_bigquery(local_path: str) -> None:
 
 def run_ingestion():
     """Lance l'ingestion complète : GCS + BigQuery."""
-    rh_path = "data/raw/Donnees_RH.xlsx"
-    sport_path = "data/raw/Donnees_Sportive.xlsx"
+    rh_path = DATA_RAW_PATH / "Donnees_RH.xlsx"
+    sport_path = DATA_RAW_PATH / "Donnees_Sportive.xlsx"
 
     print("=" * 50)
     print("📤 Upload vers GCS (raw)...")
     print("=" * 50)
-    upload_to_gcs(rh_path, "donnees_rh.xlsx")
-    upload_to_gcs(sport_path, "donnees_sportive.xlsx")
+    upload_to_gcs(str(rh_path), "donnees_rh.xlsx")
+    upload_to_gcs(str(sport_path), "donnees_sportive.xlsx")
 
     print()
     print("=" * 50)
     print("📥 Chargement dans BigQuery (bronze)...")
     print("=" * 50)
-    load_rh_to_bigquery(rh_path)
-    load_sport_to_bigquery(sport_path)
+    load_rh_to_bigquery(str(rh_path))
+    load_sport_to_bigquery(str(sport_path))
 
     print()
     print("🎉 Ingestion terminée !")
