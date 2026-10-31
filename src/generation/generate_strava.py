@@ -5,26 +5,56 @@ basées sur les profils sportifs des salariés.
 
 Usage :
     python -m src.generation.generate_strava
+
+Mode démo (sans BigQuery) :
+    DEMO_MODE=true python -m src.generation.generate_strava
 """
 
 import os
 import random
+import sys
 from datetime import datetime, timedelta
-from faker import Faker
-from google.cloud import bigquery
-from pyspark.sql import SparkSession
-from pyspark.sql.types import (
-    StructType, StructField, IntegerType, StringType,
-    FloatType, TimestampType
-)
+from pathlib import Path
+
+import pandas as pd
 from dotenv import load_dotenv
+from faker import Faker
+
+# Ajoute la racine du projet au PYTHONPATH
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 load_dotenv()
 
-# --- Config ---
+# Mode démo : pas de connexion cloud
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+if not DEMO_MODE:
+    from google.cloud import bigquery
+    from pyspark.sql import SparkSession
+    from pyspark.sql.types import (
+        FloatType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampType,
+    )
+
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE", "sport_bronze")
-SIMULATION_MONTHS = int(os.getenv("STRAVA_SIMULATION_MONTHS", 12))
+BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE")
+SIMULATION_MONTHS = int(os.getenv("STRAVA_SIMULATION_MONTHS", "12"))
+
+# Validation
+if not DEMO_MODE and (not PROJECT_ID or not BQ_DATASET_BRONZE):
+    raise ValueError("""
+    ❌ Configuration manquante.
+    
+    Variables requises :
+    - GCP_PROJECT_ID
+    - BQ_DATASET_BRONZE
+    
+    Ou activer le mode démo : DEMO_MODE=true
+    """)
 
 fake = Faker("fr_FR")
 random.seed(42)
@@ -32,19 +62,13 @@ random.seed(42)
 # =============================================================
 # Profils sportifs : fréquence, distance, allure par sport
 # =============================================================
-# Chaque profil définit :
-#   - freq_min/max : nombre de séances par mois
-#   - dist_min/max : distance en mètres (None si non applicable)
-#   - pace_min/max : allure en secondes par km (pour calculer la durée)
-#   - duration_min/max : durée en secondes (si pas de distance)
-#   - comments : exemples de commentaires réalistes
 
 SPORT_PROFILES = {
     "Runing": {
         "display_name": "Course à pied",
         "freq_min": 4, "freq_max": 10,
         "dist_min": 3000, "dist_max": 21000,
-        "pace_min": 270, "pace_max": 420,  # 4:30 à 7:00 /km
+        "pace_min": 270, "pace_max": 420,
         "comments": [
             "Bonne séance ce matin !",
             "Reprise après une semaine de repos",
@@ -62,7 +86,7 @@ SPORT_PROFILES = {
         "display_name": "Randonnée",
         "freq_min": 2, "freq_max": 5,
         "dist_min": 5000, "dist_max": 25000,
-        "pace_min": 500, "pace_max": 900,  # 8:20 à 15:00 /km
+        "pace_min": 500, "pace_max": 900,
         "comments": [
             "Magnifique sentier avec vue sur la mer",
             "Rando en famille, les enfants ont adoré",
@@ -90,7 +114,7 @@ SPORT_PROFILES = {
         "display_name": "Natation",
         "freq_min": 3, "freq_max": 7,
         "dist_min": 500, "dist_max": 3000,
-        "pace_min": 100, "pace_max": 180,  # secondes par 100m → converti par km
+        "pace_min": 100, "pace_max": 180,
         "comments": [
             "50 longueurs ce matin, bon rythme",
             "Séance technique : crawl et dos",
@@ -232,11 +256,26 @@ SPORT_PROFILES = {
 }
 
 
+# =============================================================
+# DONNÉES DE DÉMO (mode local sans BigQuery)
+# =============================================================
+
+DEMO_SPORTIFS = [
+    {"id_salarie": 1, "prenom": "Alice", "nom": "Dupont", "sport_pratique": "Runing"},
+    {"id_salarie": 2, "prenom": "Bob", "nom": "Martin", "sport_pratique": "Vélo"},
+    {"id_salarie": 3, "prenom": "Charlie", "nom": "Durand", "sport_pratique": "Natation"},
+]
+
+
 def get_sportifs_from_bigquery() -> list[dict]:
     """
     Récupère les salariés sportifs depuis BigQuery (bronze).
     Jointure employees + sports_declared.
     """
+    if DEMO_MODE:
+        print("🎭 Mode démo : utilisation des sportifs de démo")
+        return DEMO_SPORTIFS
+    
     client = bigquery.Client(project=PROJECT_ID)
     query = f"""
         SELECT
@@ -346,8 +385,11 @@ def generate_all_activities(sportifs: list[dict]) -> list[dict]:
     return all_activities
 
 
-def create_spark_session() -> SparkSession:
+def create_spark_session():
     """Crée une session Spark locale."""
+    if DEMO_MODE:
+        raise RuntimeError("Mode démo : pas de session Spark")
+    
     return (
         SparkSession.builder
         .appName("SportDataSolution-StravaSimulation")
@@ -356,7 +398,7 @@ def create_spark_session() -> SparkSession:
     )
 
 
-def activities_to_spark_df(spark: SparkSession, activities: list[dict]):
+def activities_to_spark_df(spark, activities: list[dict]):
     """Convertit la liste d'activités en DataFrame Spark."""
     schema = StructType([
         StructField("id", IntegerType(), False),
@@ -374,8 +416,16 @@ def activities_to_spark_df(spark: SparkSession, activities: list[dict]):
 
 def load_to_bigquery(activities: list[dict]) -> None:
     """Charge les activités générées dans BigQuery (bronze)."""
-    import pandas as pd
-
+    if DEMO_MODE:
+        print(f"🎭 Mode démo : chargement simulé de {len(activities)} activités → BigQuery")
+        # Aperçu des données
+        df = pd.DataFrame(activities)
+        print(f"\n📊 Aperçu des données générées :")
+        print(df.head(10).to_string())
+        print(f"\n📈 Stats par sport :")
+        print(df["sport_type"].value_counts().to_string())
+        return
+    
     client = bigquery.Client(project=PROJECT_ID)
     table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.strava_activities"
 
@@ -407,33 +457,38 @@ def load_to_bigquery(activities: list[dict]) -> None:
 def run():
     """Point d'entrée principal."""
     print("=" * 60)
-    print("🏃 Génération des données Strava simulées (PySpark)")
+    print("🏃 Génération des données Strava simulées")
+    if DEMO_MODE:
+        print("🎭 MODE DÉMO — Données fictives, pas de connexion cloud")
     print("=" * 60)
 
-    # 1. Récupérer les sportifs depuis BigQuery
-    print("\n📥 Lecture des sportifs depuis BigQuery (bronze)...")
+    # 1. Récupérer les sportifs
+    print("\n📥 Lecture des sportifs...")
     sportifs = get_sportifs_from_bigquery()
 
     # 2. Générer les activités
     print(f"\n⚡ Génération des activités...")
     all_activities = generate_all_activities(sportifs)
 
-    # 3. Créer un DataFrame Spark (pour montrer l'usage de PySpark)
-    print(f"\n🔧 Création du DataFrame Spark...")
-    spark = create_spark_session()
-    try:
-        spark_df = activities_to_spark_df(spark, all_activities)
-        print(f"   Schema Spark :")
-        spark_df.printSchema()
-        print(f"   Aperçu (5 premières lignes) :")
-        spark_df.show(5, truncate=False)
-        print(f"   Stats par sport :")
-        spark_df.groupBy("sport_type").count().orderBy("count", ascending=False).show()
-    finally:
-        spark.stop()
+    # 3. PySpark (seulement en mode non-démo)
+    if not DEMO_MODE:
+        print(f"\n🔧 Création du DataFrame Spark...")
+        spark = create_spark_session()
+        try:
+            spark_df = activities_to_spark_df(spark, all_activities)
+            print(f"   Schema Spark :")
+            spark_df.printSchema()
+            print(f"   Aperçu (5 premières lignes) :")
+            spark_df.show(5, truncate=False)
+            print(f"   Stats par sport :")
+            spark_df.groupBy("sport_type").count().orderBy("count", ascending=False).show()
+        finally:
+            spark.stop()
+    else:
+        print(f"\n🎭 Mode démo : étape PySpark ignorée")
 
-    # 4. Charger dans BigQuery
-    print(f"\n📤 Chargement dans BigQuery (bronze)...")
+    # 4. Charger dans BigQuery (ou simuler)
+    print(f"\n📤 Chargement des données...")
     load_to_bigquery(all_activities)
 
     print(f"\n🎉 Génération terminée ! {len(all_activities)} activités sur {SIMULATION_MONTHS} mois.")
