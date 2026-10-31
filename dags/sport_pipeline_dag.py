@@ -6,34 +6,61 @@ Features :
 - XCom : les tâches se passent des métriques (nb lignes, statuts) entre elles
 - Alertes Slack : notification automatique en cas d'échec d'une tâche
 - Airflow Variables : les secrets sont stockés chiffrés dans l'UI Airflow
+- Chemins relatifs : portable entre environnements (local, Docker, prod)
 """
 
-import sys
 import json
+import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
+
 from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.models import Variable
 from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
-from airflow.models import Variable
+from airflow.operators.python import PythonOperator
 
-# Ajouter le dossier parent au PYTHONPATH pour les imports
-sys.path.insert(0, "/opt/airflow")
+# =============================================================
+# CONSTANTES
+# =============================================================
+
+# Chemins relatifs depuis la racine du projet
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_RAW_PATH = PROJECT_ROOT / "data" / "raw"
+DBT_PROJECT_PATH = PROJECT_ROOT / "dbt_sport"
+
+# Clés XCom (constantes pour éviter les typos)
+XCOM_KEY_INGEST_RH = "ingest_rh_metrics"
+XCOM_KEY_INGEST_SPORT = "ingest_sport_metrics"
+XCOM_KEY_STRAVA = "strava_metrics"
+XCOM_KEY_VALIDATION = "validation_metrics"
+XCOM_KEY_GE = "ge_metrics"
+
+# Variables Airflow (avec valeurs par défaut pour le mode démo)
+def get_airflow_var(key: str, default: str = None) -> str:
+    """Récupère une Variable Airflow avec fallback."""
+    try:
+        return Variable.get(key)
+    except Exception:
+        if default:
+            return default
+        raise
 
 
 # =============================================================
 # ALERTE SLACK EN CAS D'ÉCHEC
 # =============================================================
+
 def on_failure_callback(context):
     """
     Callback appelé automatiquement quand une tâche échoue.
     Envoie une alerte sur le canal #sport-alertes via un webhook dédié.
     """
-    import json
-    import urllib.request
-
-    # Récupérer le webhook alertes depuis les Variables Airflow
-    alertes_webhook = Variable.get("slack_webhook_alertes_secret")
+    try:
+        alertes_webhook = Variable.get("slack_webhook_alertes_secret")
+    except Exception:
+        print("⚠️ Variable slack_webhook_alertes_secret non configurée")
+        return
 
     task_id = context["task_instance"].task_id
     dag_id = context["task_instance"].dag_id
@@ -76,60 +103,60 @@ default_args = {
 # =============================================================
 # FONCTIONS AVEC XCOM
 # =============================================================
+
 def task_ingest_rh(**context):
     """Ingestion RH → GCS + BigQuery. Push le nombre de lignes via XCom."""
-    from src.ingestion.ingest import upload_to_gcs, load_rh_to_bigquery
     from google.cloud import bigquery
+    from src.ingestion.ingest import load_rh_to_bigquery, upload_to_gcs
 
-    project_id = Variable.get("gcp_project_id")
+    project_id = get_airflow_var("gcp_project_id")
+    dataset_bronze = get_airflow_var("bq_dataset_bronze", "sport_bronze")
 
-    rh_path = "/opt/airflow/data/raw/Donnees_RH.xlsx"
-    upload_to_gcs(rh_path, "donnees_rh.xlsx")
-    load_rh_to_bigquery(rh_path)
+    rh_path = DATA_RAW_PATH / "Donnees_RH.xlsx"
+    upload_to_gcs(str(rh_path), "donnees_rh.xlsx")
+    load_rh_to_bigquery(str(rh_path))
 
     client = bigquery.Client(project=project_id)
-    table = client.get_table(f"{project_id}.sport_bronze.employees")
+    table = client.get_table(f"{project_id}.{dataset_bronze}.employees")
     row_count = table.num_rows
 
     metrics = {"table": "employees", "rows_loaded": row_count, "status": "success"}
-    context["ti"].xcom_push(key="ingest_rh_metrics", value=metrics)
+    context["ti"].xcom_push(key=XCOM_KEY_INGEST_RH, value=metrics)
     return metrics
 
 
 def task_ingest_sport(**context):
     """Ingestion Sport → GCS + BigQuery. Push le nombre de lignes via XCom."""
-    from src.ingestion.ingest import upload_to_gcs, load_sport_to_bigquery
     from google.cloud import bigquery
+    from src.ingestion.ingest import load_sport_to_bigquery, upload_to_gcs
 
-    # ⚠️ TEST ALERTE — Test du callback
-    #raise Exception("🧪 Test alerte — erreur volontaire pour tester le callback")
+    project_id = get_airflow_var("gcp_project_id")
+    dataset_bronze = get_airflow_var("bq_dataset_bronze", "sport_bronze")
 
-    project_id = Variable.get("gcp_project_id")
-
-    sport_path = "/opt/airflow/data/raw/Donnees_Sportive.xlsx"
-    upload_to_gcs(sport_path, "donnees_sportive.xlsx")
-    load_sport_to_bigquery(sport_path)
+    sport_path = DATA_RAW_PATH / "Donnees_Sportive.xlsx"
+    upload_to_gcs(str(sport_path), "donnees_sportive.xlsx")
+    load_sport_to_bigquery(str(sport_path))
 
     client = bigquery.Client(project=project_id)
-    table = client.get_table(f"{project_id}.sport_bronze.sports_declared")
+    table = client.get_table(f"{project_id}.{dataset_bronze}.sports_declared")
     row_count = table.num_rows
 
     metrics = {"table": "sports_declared", "rows_loaded": row_count, "status": "success"}
-    context["ti"].xcom_push(key="ingest_sport_metrics", value=metrics)
+    context["ti"].xcom_push(key=XCOM_KEY_INGEST_SPORT, value=metrics)
     return metrics
 
 
 def task_generate_strava(**context):
     """Génération Strava. Récupère les métriques d'ingestion via XCom."""
     from src.generation.generate_strava import (
-        get_sportifs_from_bigquery,
         generate_all_activities,
+        get_sportifs_from_bigquery,
         load_to_bigquery,
     )
 
     ti = context["ti"]
-    rh_metrics = ti.xcom_pull(task_ids="ingest_rh_data", key="ingest_rh_metrics")
-    sport_metrics = ti.xcom_pull(task_ids="ingest_sport_data", key="ingest_sport_metrics")
+    rh_metrics = ti.xcom_pull(task_ids="ingest_rh_data", key=XCOM_KEY_INGEST_RH)
+    sport_metrics = ti.xcom_pull(task_ids="ingest_sport_data", key=XCOM_KEY_INGEST_SPORT)
     print(f"📊 XCom reçu — RH: {rh_metrics}, Sport: {sport_metrics}")
 
     sportifs = get_sportifs_from_bigquery()
@@ -141,13 +168,16 @@ def task_generate_strava(**context):
         "sportifs_count": len(sportifs),
         "status": "success",
     }
-    context["ti"].xcom_push(key="strava_metrics", value=metrics)
+    context["ti"].xcom_push(key=XCOM_KEY_STRAVA, value=metrics)
     return metrics
 
 
 def task_validate_distances(**context):
     """Validation Google Maps. Push les anomalies via XCom."""
-    from src.validation.validate_distances import validate_commute_declarations, save_to_bigquery
+    from src.validation.validate_distances import (
+        save_to_bigquery,
+        validate_commute_declarations,
+    )
 
     results_df = validate_commute_declarations()
     save_to_bigquery(results_df)
@@ -162,17 +192,18 @@ def task_validate_distances(**context):
         "anomalies": anomalies,
         "status": "success",
     }
-    context["ti"].xcom_push(key="validation_metrics", value=metrics)
+    context["ti"].xcom_push(key=XCOM_KEY_VALIDATION, value=metrics)
     return metrics
 
 
 def task_great_expectations(**context):
     """Great Expectations. Push les résultats via XCom."""
     from ge_tests.validate_bronze import run
+
     run()
 
     metrics = {"status": "success"}
-    context["ti"].xcom_push(key="ge_metrics", value=metrics)
+    context["ti"].xcom_push(key=XCOM_KEY_GE, value=metrics)
     return metrics
 
 
@@ -182,16 +213,17 @@ def task_notify_slack(**context):
     Récupère les métriques de toutes les tâches précédentes via XCom
     et envoie un résumé du pipeline.
     """
+    import time
+
     from src.notifications.send_recent_activities import get_recent_activities
     from src.notifications.slack_notifier import build_message, send_slack_message
-    import time
 
     ti = context["ti"]
 
-    rh_metrics = ti.xcom_pull(task_ids="ingest_rh_data", key="ingest_rh_metrics") or {}
-    sport_metrics = ti.xcom_pull(task_ids="ingest_sport_data", key="ingest_sport_metrics") or {}
-    strava_metrics = ti.xcom_pull(task_ids="generate_strava_simulation", key="strava_metrics") or {}
-    validation_metrics = ti.xcom_pull(task_ids="validate_distances_google_maps", key="validation_metrics") or {}
+    rh_metrics = ti.xcom_pull(task_ids="ingest_rh_data", key=XCOM_KEY_INGEST_RH) or {}
+    sport_metrics = ti.xcom_pull(task_ids="ingest_sport_data", key=XCOM_KEY_INGEST_SPORT) or {}
+    strava_metrics = ti.xcom_pull(task_ids="generate_strava_simulation", key=XCOM_KEY_STRAVA) or {}
+    validation_metrics = ti.xcom_pull(task_ids="validate_distances_google_maps", key=XCOM_KEY_VALIDATION) or {}
 
     summary = (
         f"✅ *Pipeline Sport Data Solution — Exécution terminée*\n"
@@ -256,12 +288,12 @@ with DAG(
 
     dbt_run = BashOperator(
         task_id="dbt_run",
-        bash_command="cd /opt/airflow/dbt_sport && dbt run --profiles-dir .",
+        bash_command=f"cd {DBT_PROJECT_PATH} && dbt run --profiles-dir .",
     )
 
     dbt_test = BashOperator(
         task_id="dbt_test",
-        bash_command="cd /opt/airflow/dbt_sport && dbt test --profiles-dir .",
+        bash_command=f"cd {DBT_PROJECT_PATH} && dbt test --profiles-dir .",
     )
 
     run_great_expectations = PythonOperator(
@@ -274,11 +306,11 @@ with DAG(
         task_id="notify_slack_activities",
         python_callable=task_notify_slack,
         provide_context=True,
-        retries=2,  #2 retries pour notif Slack en cas d'échec 
-        trigger_rule="all_done",  # S'exécute même si une task précédente échoue
+        retries=2,
+        trigger_rule="all_done",
     )
 
-    end = EmptyOperator(task_id="end", trigger_rule="all_done") 
+    end = EmptyOperator(task_id="end", trigger_rule="all_done")
 
     # === Task dependencies ===
     start >> [ingest_rh, ingest_sport]
