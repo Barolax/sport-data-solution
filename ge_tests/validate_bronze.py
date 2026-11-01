@@ -8,29 +8,102 @@ Vérifie la cohérence des données entrantes :
 - Distances domicile-bureau (commute_distances)
 
 Usage :
-    python -m great_expectations.validate_bronze
+    python -m ge_tests.validate_bronze
+
+Mode démo (sans BigQuery) :
+    DEMO_MODE=true python -m ge_tests.validate_bronze
 """
 
 import os
-import great_expectations as gx
-from great_expectations.expectations import (
-    ExpectColumnValuesToNotBeNull,
-    ExpectColumnValuesToBeUnique,
-    ExpectColumnValuesToBeBetween,
-    ExpectColumnValuesToBeInSet,
-    ExpectTableRowCountToBeBetween,
-    ExpectColumnValuesToBeOfType,
-)
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
+
+# Ajoute la racine du projet au PYTHONPATH
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 load_dotenv()
 
+# Mode démo : pas de connexion BigQuery
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+if not DEMO_MODE:
+    import great_expectations as gx
+    from great_expectations.expectations import (
+        ExpectColumnValuesToBeBetween,
+        ExpectColumnValuesToBeInSet,
+        ExpectColumnValuesToBeOfType,
+        ExpectColumnValuesToBeUnique,
+        ExpectColumnValuesToNotBeNull,
+        ExpectTableRowCountToBeBetween,
+    )
+
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE", "sport_bronze")
+BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE")
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+# Validation
+if not DEMO_MODE and (not PROJECT_ID or not BQ_DATASET_BRONZE):
+    raise ValueError("""
+    ❌ Configuration manquante.
+    
+    Variables requises :
+    - GCP_PROJECT_ID
+    - BQ_DATASET_BRONZE
+    
+    Ou activer le mode démo : DEMO_MODE=true
+    """)
+
+
+def run_demo():
+    """Mode démo : affiche les tests qui seraient exécutés."""
+    print("=" * 60)
+    print("🧪 Great Expectations — Validation des données bronze")
+    print("🎭 MODE DÉMO — Tests simulés, pas de connexion BigQuery")
+    print("=" * 60)
+    
+    tables = [
+        ("employees", 12),
+        ("sports_declared", 2),
+        ("strava_activities", 7),
+        ("commute_distances", 5),
+    ]
+    
+    total_tests = 0
+    total_passed = 0
+    
+    for table_name, nb_tests in tables:
+        print(f"\n📋 Validation : {table_name}")
+        print(f"   🎭 {nb_tests} tests simulés")
+        
+        # Simulation de résultats (90% de succès)
+        import random
+        random.seed(hash(table_name) % 1000)
+        passed = int(nb_tests * 0.9)
+        failed = nb_tests - passed
+        
+        for i in range(passed):
+            print(f"   ✅ Test {i+1} simulé")
+        for i in range(failed):
+            print(f"   ❌ Test {passed+i+1} simulé (échec)")
+        
+        total_tests += nb_tests
+        total_passed += passed
+    
+    print(f"\n{'=' * 60}")
+    print("📊 Résumé Great Expectations (démo)")
+    print(f"{'=' * 60}")
+    print(f"   Total : {total_passed}/{total_tests} tests passés")
+    print(f"\n🎉 Démonstration terminée !")
 
 
 def run():
+    """Exécute les validations Great Expectations."""
+    if DEMO_MODE:
+        run_demo()
+        return
+    
     print("=" * 60)
     print("🧪 Great Expectations — Validation des données bronze")
     print("=" * 60)
@@ -181,12 +254,11 @@ def run():
         ExpectColumnValuesToNotBeNull(column="sport_type")
     )
     
-    # Validation des seuils réalistes par activité (distance peut être nulle pour une session de muscu, mais pas négative)
-    # Distance max réaliste : 200 km (vélo/triathlon)
+    # Validation des seuils réalistes par activité
     activities_suite.add_expectation(
         ExpectColumnValuesToBeBetween(
             column="distance_m", min_value=0, max_value=200000,
-            mostly=0.99, # Tolère 1% de nulls
+            mostly=0.99,  # Tolère 1% de nulls
         )
     )
 
