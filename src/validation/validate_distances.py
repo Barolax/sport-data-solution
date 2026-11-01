@@ -8,22 +8,48 @@ Règles :
 
 Usage :
     python -m src.validation.validate_distances
+
+Mode démo (sans APIs externes) :
+    DEMO_MODE=true python -m src.validation.validate_distances
 """
 
 import os
+import sys
 import time
+from pathlib import Path
+
 import pandas as pd
-import googlemaps
-from google.cloud import bigquery
 from dotenv import load_dotenv
+
+# Ajoute la racine du projet au PYTHONPATH
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 load_dotenv()
 
-# --- Config ---
+# Mode démo : pas de connexion aux APIs externes
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+if not DEMO_MODE:
+    import googlemaps
+    from google.cloud import bigquery
+
 PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE", "sport_bronze")
+BQ_DATASET_BRONZE = os.getenv("BQ_DATASET_BRONZE")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 COMPANY_ADDRESS = os.getenv("COMPANY_ADDRESS", "1362 Av. des Platanes, 34970 Lattes")
+
+# Validation
+if not DEMO_MODE and (not PROJECT_ID or not BQ_DATASET_BRONZE or not GOOGLE_MAPS_API_KEY):
+    raise ValueError("""
+    ❌ Configuration manquante.
+    
+    Variables requises :
+    - GCP_PROJECT_ID
+    - BQ_DATASET_BRONZE
+    - GOOGLE_MAPS_API_KEY
+    
+    Ou activer le mode démo : DEMO_MODE=true
+    """)
 
 # Seuils de distance par mode de transport (en km)
 DISTANCE_THRESHOLDS = {
@@ -41,13 +67,45 @@ TRANSPORT_MODES = {
 }
 
 
-def get_gmaps_client() -> googlemaps.Client:
+# =============================================================
+# DONNÉES DE DÉMO
+# =============================================================
+
+DEMO_COMMUTERS = pd.DataFrame({
+    "id_salarie": [1, 2, 3],
+    "prenom": ["Alice", "Bob", "Charlie"],
+    "nom": ["Dupont", "Martin", "Durand"],
+    "adresse_domicile": [
+        "10 rue de la Paix, Montpellier",
+        "25 avenue de la Mer, Palavas",
+        "5 place de la Comédie, Montpellier"
+    ],
+    "moyen_deplacement": ["Marche/running", "Vélo/Trottinette/Autres", "Marche/running"]
+})
+
+DEMO_NON_COMMUTERS = pd.DataFrame({
+    "id_salarie": [4, 5],
+    "prenom": ["David", "Emma"],
+    "nom": ["Petit", "Roux"],
+    "adresse_domicile": [
+        "50 avenue de Toulouse, Montpellier",
+        "8 rue de l'Université, Montpellier"
+    ],
+    "moyen_deplacement": ["Voiture", "Transports en commun"]
+})
+
+
+def get_gmaps_client():
     """Initialise le client Google Maps."""
+    if DEMO_MODE:
+        raise RuntimeError("Mode démo : pas de connexion Google Maps")
     return googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
 
 
-def get_bq_client() -> bigquery.Client:
+def get_bq_client():
     """Initialise le client BigQuery."""
+    if DEMO_MODE:
+        raise RuntimeError("Mode démo : pas de connexion BigQuery")
     return bigquery.Client(project=PROJECT_ID)
 
 
@@ -56,6 +114,10 @@ def get_sport_commuters() -> pd.DataFrame:
     Récupère les salariés ayant déclaré un mode de transport sportif
     depuis BigQuery (bronze).
     """
+    if DEMO_MODE:
+        print("🎭 Mode démo : utilisation des commuters de démo")
+        return DEMO_COMMUTERS.copy()
+    
     client = get_bq_client()
     query = f"""
         SELECT
@@ -76,6 +138,10 @@ def get_non_sport_commuters() -> pd.DataFrame:
     Récupère les salariés qui NE viennent PAS en mode sportif
     (voiture ou transports en commun).
     """
+    if DEMO_MODE:
+        print("🎭 Mode démo : utilisation des non-commuters de démo")
+        return DEMO_NON_COMMUTERS.copy()
+    
     client = get_bq_client()
     query = f"""
         SELECT
@@ -91,16 +157,27 @@ def get_non_sport_commuters() -> pd.DataFrame:
     return client.query(query).to_dataframe()
 
 
-def calculate_distance(
-    client: googlemaps.Client, origin: str, mode: str
-) -> dict:
+def calculate_distance(origin: str, mode: str) -> dict:
     """
     Calcule la distance entre une adresse et le bureau.
 
     Returns:
         Dict avec distance_km, duration_text, status
     """
+    if DEMO_MODE:
+        # Simulation de distances réalistes
+        import random
+        random.seed(hash(origin) % 1000)  # Seed basé sur l'adresse pour cohérence
+        distance_km = round(random.uniform(2, 30), 2)
+        duration_min = int(distance_km * 3)  # ~20 km/h en moyenne
+        return {
+            "distance_km": distance_km,
+            "duration_text": f"{duration_min} min",
+            "status": "OK",
+        }
+    
     try:
+        client = get_gmaps_client()
         result = client.distance_matrix(
             origins=[origin],
             destinations=[COMPANY_ADDRESS],
@@ -142,15 +219,14 @@ def validate_commute_declarations() -> pd.DataFrame:
     commuters = get_sport_commuters()
     print(f"   {len(commuters)} salariés à valider\n")
 
-    gmaps = get_gmaps_client()
     results = []
 
     for _, row in commuters.iterrows():
         mode = TRANSPORT_MODES.get(row["moyen_deplacement"], "walking")
         threshold = DISTANCE_THRESHOLDS.get(row["moyen_deplacement"], 15)
 
-        # Appel Google Maps
-        dist_info = calculate_distance(gmaps, row["adresse_domicile"], mode)
+        # Calcul de distance (réel ou simulé)
+        dist_info = calculate_distance(row["adresse_domicile"], mode)
 
         # Vérification du seuil
         is_valid = None
@@ -192,14 +268,21 @@ def validate_commute_declarations() -> pd.DataFrame:
             "anomaly_reason": anomaly_reason,
         })
 
-        # Pause pour respecter les rate limits de l'API
-        time.sleep(0.1)
+        # Pause pour respecter les rate limits de l'API (seulement en mode réel)
+        if not DEMO_MODE:
+            time.sleep(0.1)
 
     return pd.DataFrame(results)
 
 
 def save_to_bigquery(df: pd.DataFrame, table_name: str = "commute_distances") -> None:
     """Sauvegarde les résultats de validation dans BigQuery (bronze)."""
+    if DEMO_MODE:
+        print(f"\n🎭 Mode démo : sauvegarde simulée de {len(df)} lignes → {table_name}")
+        print(f"   Aperçu :")
+        print(df.head().to_string())
+        return
+    
     client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_BRONZE}.{table_name}"
 
@@ -224,12 +307,11 @@ def check_sport_suggestions() -> pd.DataFrame:
     non_sport = get_non_sport_commuters()
     print(f"   {len(non_sport)} salariés à analyser\n")
 
-    gmaps = get_gmaps_client()
     suggestions = []
 
     for _, row in non_sport.iterrows():
         # On calcule la distance en vélo (mode le plus large)
-        dist_info = calculate_distance(gmaps, row["adresse_domicile"], "bicycling")
+        dist_info = calculate_distance(row["adresse_domicile"], "bicycling")
 
         distance_km = dist_info["distance_km"]
         could_bike = distance_km is not None and distance_km <= SUGGESTION_THRESHOLD_KM
@@ -260,7 +342,8 @@ def check_sport_suggestions() -> pd.DataFrame:
             "suggestion": suggestion,
         })
 
-        time.sleep(0.1)
+        if not DEMO_MODE:
+            time.sleep(0.1)
 
     return pd.DataFrame(suggestions)
 
@@ -268,7 +351,9 @@ def check_sport_suggestions() -> pd.DataFrame:
 def run():
     """Point d'entrée principal."""
     print("=" * 60)
-    print("📍 Validation des distances domicile → bureau (Google Maps)")
+    print("📍 Validation des distances domicile → bureau")
+    if DEMO_MODE:
+        print("🎭 MODE DÉMO — Données fictives, pas d'appels API")
     print(f"   Entreprise : {COMPANY_ADDRESS}")
     print("=" * 60)
 
@@ -296,7 +381,7 @@ def run():
                 f"{row['moyen_deplacement']} — {row['anomaly_reason']}"
             )
 
-    print(f"\n📤 Sauvegarde dans BigQuery...")
+    print(f"\n📤 Sauvegarde des résultats...")
     save_to_bigquery(results_df, "commute_distances")
 
     # === PARTIE 2 : Suggestions mobilité sportive ===
@@ -313,7 +398,7 @@ def run():
     print(f"   🚴 Pourraient venir à vélo           : {eligible}")
     print(f"   🚶 Pourraient venir à pied            : {walkable}")
 
-    print(f"\n📤 Sauvegarde des suggestions dans BigQuery...")
+    print(f"\n📤 Sauvegarde des suggestions...")
     save_to_bigquery(suggestions_df, "commute_suggestions")
 
     print(f"\n🎉 Validation et suggestions terminées !")
